@@ -8,88 +8,35 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-if (!process.env.GEMINI_API_KEY) {
-  console.error("ERROR: GEMINI_API_KEY is missing in .env");
-  process.exit(1);
-}
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
-
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 const TRIAGE_SCHEMA = {
   type: "object",
   properties: {
-    urgency: {
-      type: "string",
-      enum: ["RED", "ORANGE", "GREEN"]
-    },
-    summary: {
-      type: "string"
-    },
-    warningSigns: {
-      type: "array",
-      items: {
-        type: "string"
-      }
-    },
-    whatToDo: {
-      type: "array",
-      items: {
-        type: "string"
-      }
-    },
-    firstAid: {
-      type: "array",
-      items: {
-        type: "string"
-      }
-    },
-    important: {
-      type: "string"
-    }
+    urgency: { type: "string", enum: ["RED", "ORANGE", "GREEN"] },
+    summary: { type: "string" },
+    warningSigns: { type: "array", items: { type: "string" } },
+    whatToDo: { type: "array", items: { type: "string" } },
+    firstAid: { type: "array", items: { type: "string" } },
+    important: { type: "string" }
   },
-  required: [
-    "urgency",
-    "summary",
-    "warningSigns",
-    "whatToDo",
-    "firstAid",
-    "important"
-  ]
+  required: ["urgency", "summary", "warningSigns", "whatToDo", "firstAid", "important"]
 };
 
 const SYSTEM_PROMPT = `
 You are EmergencyGuide AI, a cautious emergency-triage support assistant.
-
 You are NOT a doctor and must NOT diagnose diseases.
 
 Your purpose is to help users understand the apparent urgency of symptoms
 and identify the safest next step.
 
 URGENCY LEVELS:
-
-RED:
-Potentially life-threatening or time-sensitive symptoms.
-Recommend immediate emergency medical care.
-Examples include severe difficulty breathing, severe chest pain,
-unconsciousness, severe bleeding, stroke-like symptoms, seizures,
-severe allergic reaction, poisoning, or rapidly worsening condition.
-
-ORANGE:
-Needs prompt medical evaluation, but there is no clear indication
-of an immediate life-threatening emergency based on the information provided.
-
-GREEN:
-No obvious emergency warning signs based on the information provided.
-Provide cautious self-care guidance and tell the user what warning signs
-would require urgent medical attention.
+RED: Potentially life-threatening or time-sensitive symptoms. Recommend immediate emergency medical care.
+ORANGE: Needs prompt medical evaluation, but there is no clear indication of an immediate life-threatening emergency based on the information provided.
+GREEN: No obvious emergency warning signs based on the information provided. Provide cautious self-care guidance and warning signs.
 
 RULES:
-
 1. Never diagnose a disease.
 2. Never claim certainty about the medical cause.
 3. Never tell someone to delay emergency care.
@@ -98,34 +45,35 @@ RULES:
 6. Do not recommend prescription medicines or medication dosages.
 7. If information is insufficient, use the available information conservatively.
 8. Keep the answer concise and understandable.
-9. The user's location may be unknown, so say "local emergency medical services"
-   rather than assuming a specific emergency number.
-10. If the input is clearly unrelated to health, explain that EmergencyGuide AI
-    is intended for symptom and emergency-triage support.
+9. Say "local emergency medical services" rather than assuming a specific emergency number.
+10. If the input is clearly unrelated to health, explain that EmergencyGuide AI is intended for symptom and emergency-triage support.
 
 Return ONLY valid JSON matching the provided schema.
 `;
 
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", service: "EmergencyGuide AI" });
+});
+
 app.post("/api/triage", async (req, res) => {
   try {
-    const { symptoms } = req.body;
-
-    if (!symptoms || !symptoms.trim()) {
-      return res.status(400).json({
-        error: "Please describe the symptoms first."
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        error: "AI service is not configured. Add GEMINI_API_KEY to the Vercel Production environment variables."
       });
     }
 
-    const input = `
-${SYSTEM_PROMPT}
+    const { symptoms } = req.body || {};
 
-USER DESCRIPTION:
-${symptoms.trim()}
-`;
+    if (!symptoms || typeof symptoms !== "string" || !symptoms.trim()) {
+      return res.status(400).json({ error: "Please describe the symptoms first." });
+    }
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     const interaction = await ai.interactions.create({
       model: "gemini-3.5-flash-lite",
-      input,
+      input: `${SYSTEM_PROMPT}\n\nUSER DESCRIPTION:\n${symptoms.trim()}`,
       response_format: {
         type: "text",
         mime_type: "application/json",
@@ -133,25 +81,19 @@ ${symptoms.trim()}
       }
     });
 
-    const raw = interaction.output_text;
-
-    if (!raw) {
+    if (!interaction.output_text) {
       throw new Error("The AI returned an empty response.");
     }
 
     let result;
-
     try {
-      result = JSON.parse(raw);
+      result = JSON.parse(interaction.output_text);
     } catch (parseError) {
-      console.error("JSON PARSE ERROR:", raw);
+      console.error("JSON PARSE ERROR:", interaction.output_text);
       throw new Error("The AI returned an invalid structured response.");
     }
 
-    res.json({
-      result
-    });
-
+    return res.json({ result });
   } catch (error) {
     console.error("AI ERROR:", error);
 
@@ -161,12 +103,16 @@ ${symptoms.trim()}
       });
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Unable to analyze the symptoms right now. Please try again."
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`EmergencyGuide AI running at http://localhost:${PORT}`);
-});
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(Number(PORT), () => {
+    console.log(`EmergencyGuide AI running on port ${PORT}`);
+  });
+}
