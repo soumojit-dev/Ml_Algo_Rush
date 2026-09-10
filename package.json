@@ -1,0 +1,13 @@
+{
+  "name": "ml-algo-rush",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.21.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}
